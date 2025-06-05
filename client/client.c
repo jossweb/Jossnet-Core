@@ -16,9 +16,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
+#include "../cjson/cJSON.h"
 
 /* Parsed command-line options */
-static const int dh = 25529;
+static const int dh = 25519;
 static char *client_private_key = "keys/client_key_25519";
 static char *server_public_key = "keys/server_key_25519.pub";
 static const char *psk_file = "keys/psk";
@@ -29,17 +30,43 @@ static int port = 2006;
 static int padding = 0;
 static int fixed_ephemeral = 0;
 
+const KeyFile key_files[] = {
+    {"25519", "keys/client_key_25519", "keys/client_key_25519.pub"},
+    {"448",   "keys/client_key_448",   "keys/client_key_448.pub"}
+};
+
 /* Message buffer for send/receive */
 #define MAX_MESSAGE_LEN 4096
 static uint8_t message[MAX_MESSAGE_LEN + 2];
 
+
+static void save_data_from_server(char* json){
+	cJSON *root = cJSON_Parse((char*)json);
+	if(root){
+		cJSON *success = cJSON_GetObjectItemCaseSensitive(root, "success");
+		if(success){
+			cJSON *serverkey = cJSON_GetObjectItemCaseSensitive(root, "server_key");
+ 			char* path;
+			if(dh==25519){
+				path="keys/server_key_25519.pub";
+			}else{
+				path="keys/server_key_448.pub";
+			}
+			write_in_file(path, (char*)serverkey);
+		}else{
+			printf("Server don't send data successfully\n");
+		}
+	}else{
+		printf("Failed to parse JSON from server\n");
+	}
+	printf("Data saved successfully\n");
+}
 /* Initialize the handshake using command-line options */
 static int initialize_handshake(NoiseHandshakeState *handshake, const void *prologue, size_t prologue_len){
     NoiseDHState *dh;
     uint8_t *key = 0;
     size_t key_len = 0;
     int err;
-
     /* Set the prologue first */
     err = noise_handshakestate_set_prologue(handshake, prologue, prologue_len);
     if (err != NOISE_ERROR_NONE) {
@@ -122,18 +149,56 @@ int main(int argc, char *argv[])
     size_t message_size;
     size_t max_line_len;
 
+	if (!(argc > 1 && !strcmp(argv[1], "--initkeys"))) {
+		if ((dh == 25519) &&
+    	(access("keys/server_key_25519.pub", R_OK) ||
+   		access(key_files[0].private_key, R_OK) ||
+   		access(key_files[0].public_key, R_OK))) {
+   			int status = system("./client --initkeys");
+   			if (status != 0) {
+       			fprintf(stderr, "Error --initkeys\n");
+    	 		exit(1);
+    		}
+		}
+
+		if ((dh == 448) &&
+    		(access("keys/server_key_448.pub", R_OK) ||
+     		access(key_files[1].private_key, R_OK) ||
+     		access(key_files[1].public_key, R_OK))) {
+
+    		int status = system("./client --initkeys");
+    		if (status != 0) {
+        		fprintf(stderr, "Error --initkeys\n");
+       	 		exit(1);
+    		}
+		}
+	}
+
 	if (argc > 1 && !strcmp(argv[1], "--initkeys")) {
         printf("[!] Init keys mode is enable\n");
 		if(dh==448){
-			protocol = "NoisePSK_XX_448_ChaChaPoly_BLAKE2b";
+			protocol = "Noise_NN_448_ChaChaPoly_BLAKE2b";
+			client_private_key = "keys/client_key_448";
 		}else if(dh==25519){
-			protocol = "NoisePSK_XX_25519_ChaChaPoly_BLAKE2b";
+			protocol = "Noise_NN_448_ChaChaPoly_BLAKE2b";
+			client_private_key = "keys/client_key_25519";
 		}else{
 			printf("[X] Init keys mode is disabled\n %d is not supported\n", dh);
 			return 0;
 		}
-		client_private_key = NULL;
 		server_public_key = NULL;
+
+		//generate new keys
+		int error = 0;
+		for (int i = 0; i < 2; i++) {
+        	error = gen_keys(key_files[i]);
+    	}
+		if (error) {
+        	printf("\033[31m[X] Error : can't generate keys\033[0m\n");
+        	return 1;
+    	} else {
+        	printf("\033[0;32m[✓] Success: Keys and PSK generated successfully\033[0m\n");
+    	}
     }else if(dh==448){
 		client_private_key = "client_key_448";
 		server_public_key = "server_key_448.pub";
@@ -167,7 +232,6 @@ int main(int argc, char *argv[])
     }
     /* Attempt to connect to the remote party */
     fd = jossnet_connect(hostname, port);
-	printf("init");
     if (fd < 0) {
         noise_handshakestate_free(handshake);
 		printf("Can't find the server, check host and port\n");
@@ -257,11 +321,46 @@ int main(int argc, char *argv[])
     if (ok) {
         printf("%s handshake complete. Send a message to the server\n", protocol);
     }
-
-    /* Read lines from stdin, send to the server, and wait for jossnetes */
+	//get client's public key
+	char* pub_key;
+	if(dh==448){
+		pub_key = read_file("keys/client_key_448.pub");
+	}else if(dh==25519){
+		pub_key = read_file("keys/client_key_448.pub");
+	}
+	if(!pub_key){
+		return 1;
+	}
+	int sent_init_request = 0;
+    /* Read lines from stdin, send to the server, and wait for server's response */
     max_line_len = sizeof(message) - 2 - noise_cipherstate_get_mac_length(send_cipher);
-    while (ok && fgets((char *)(message + 2), max_line_len, stdin)) {
+    while (ok) {
         /* Pad the message to a uniform size */
+		if (argc > 1 && !strcmp(argv[1], "--initkeys") && !sent_init_request) {
+        	cJSON *response = cJSON_CreateObject();
+        	cJSON_AddStringToObject(response, "endpoint", "registre");
+        	cJSON_AddNumberToObject(response, "type", dh);
+        	cJSON_AddStringToObject(response, "key", pub_key);
+        	char* json_str = cJSON_PrintUnformatted(response);
+        	size_t len = strlen(json_str);
+
+        	if (len >= max_line_len) {
+            	fprintf(stderr, "Requête JSON trop longue\n");
+            	free(json_str);
+            	cJSON_Delete(response);
+            	ok = 0;
+            	break;
+        	}
+        	memcpy(message + 2, json_str, len + 1);
+        	message_size = len;
+        	free(json_str);
+        	cJSON_Delete(response);
+        	sent_init_request = 1;
+    	}else{
+			if(!fgets((char *)(message + 2), max_line_len, stdin)){
+				break;
+			}
+		}
         message_size = strlen((const char *)(message + 2));
         if (padding) {
             err = noise_randstate_pad
@@ -276,8 +375,7 @@ int main(int argc, char *argv[])
         }
 
         /* Encrypt the message and send it */
-        noise_buffer_set_inout
-            (mbuf, message + 2, message_size, sizeof(message) - 2);
+        noise_buffer_set_inout(mbuf, message + 2, message_size, sizeof(message) - 2);
         err = noise_cipherstate_encrypt(send_cipher, &mbuf);
         if (err != NOISE_ERROR_NONE) {
             noise_perror("write", err);
@@ -317,9 +415,14 @@ int main(int argc, char *argv[])
                 mbuf.size = end + 1 - mbuf.data;
         }
 
-        /* Write the jossnet to standard output */
+        /* Write the server's response in standard output */
         fputs("Received: ", stdout);
         fwrite(mbuf.data, 1, mbuf.size, stdout);
+
+		if(argc > 1 && !strcmp(argv[1], "--initkeys")){
+			save_data_from_server((char *)mbuf.data);
+			break;
+		}
     }
 
     /* Clean up and exit */
@@ -329,5 +432,3 @@ int main(int argc, char *argv[])
     jossnet_close(fd);
     return ok ? 0 : 1;
 }
-
-//#include "common.c"
