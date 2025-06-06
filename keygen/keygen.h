@@ -14,3 +14,4 @@ typedef struct {
 } KeyFile;
 
 int gen_keys(KeyFile key);
+int gen_psk();

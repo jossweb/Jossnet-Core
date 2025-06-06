@@ -46,6 +46,43 @@ typedef int sockopt_type;
 
 int jossnet_verbose = 0;
 
+int write_in_file(const char *path, const char* content) {
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        perror("Error, can't open : %s");
+        return 0;
+    }
+    if (fputs(content, f) == EOF) {
+        perror("Error can't write in: %s");
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    return 1;
+}
+char* read_file(const char* filename) {
+    FILE* file = fopen(filename, "r");
+    if (!file) {
+        perror("Error can't open file");
+        return NULL;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    rewind(file);
+
+    char* buffer = malloc(length + 1);
+    if (!buffer) {
+        perror("Error allocating memory");
+        fclose(file);
+        return NULL;
+    }
+    fread(buffer, 1, length, file);
+    buffer[length] = '\0';
+
+    fclose(file);
+    return buffer;
+}
 int jossnet_get_protocol_id(JossnetProtocolId *id, const char *name)
 {
     NoiseProtocolId nid;

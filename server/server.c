@@ -46,6 +46,7 @@ static char* register_newuser(char *message) {
     int success = 1;
     char* content = "Key successfully registered, you can now interact with the server without using the XX mod, see the documentation";
     cJSON *root = cJSON_Parse((char*)message);
+	int return_key = 0;
     if (root) {
         cJSON *endpoint = cJSON_GetObjectItemCaseSensitive(root, "endpoint");
         cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
@@ -55,42 +56,34 @@ static char* register_newuser(char *message) {
 				int type_val = type->valueint;
             	const char *key_str = key->valuestring;
             	if (type_val == 25519) {
-                	if (jossnet_load_public_key(key_str, server_key_25519, sizeof(server_key_25519), 0)) {
-                    	FILE *f = fopen("clients-25519.txt", "a");
-                    	if (f == NULL) {
-                        	printf("[X] Error can't open file keys/clients25519.json");
-                    	} else {
-                        	fprintf(f, "%s\n", key_str);
-                        	fclose(f);
-                    	}
-                	} else {
-                    	success = 0;
-                    	content = "Can't register your key";
-                	}
+                    FILE *f = fopen("clients-25519.txt", "a");
+                    if (f == NULL) {
+                       	printf("[X] Error can't open file keys/clients25519.json");
+                    } else {
+                       	fprintf(f, "%s\n", key_str);
+						return_key=25519;
+                       	fclose(f);
+                   	}
             	} else if (type_val == 448) {
-                	if (jossnet_load_public_key(key_str, server_key_448, sizeof(server_key_448), 0)) {
-                    	FILE *f = fopen("clients-448.txt", "a");
-						if (f == NULL) {
-    						printf("[X] Error can't open file clients.txt\n");
-						} else {
-    						fprintf(f, "%s\n", key_str);
-    						fclose(f);
-						}
-                	} else {
-                    	success = 0;
-                    	content = "Can't register your key";
-                	}
+                    FILE *f = fopen("clients-448.txt", "a");
+					if (f == NULL) {
+    					printf("[X] Error can't open file clients.txt\n");
+					} else {
+						return_key=448;
+   						fprintf(f, "%s\n", key_str);
+   						fclose(f);
+					}
             	} else {
                 	success = 0;
                 	content = "Bad type, check the documentation";
             	}
 			}else{
 				success = 0;
-            	content = "Bad request 1";
+            	content = "Bad request";
 			}
         } else {
             success = 0;
-            content = "Bad request 2";
+            content = "Bad request";
         }
         cJSON_Delete(root);
     } else {
@@ -100,6 +93,12 @@ static char* register_newuser(char *message) {
     cJSON *response = cJSON_CreateObject();
     cJSON_AddNumberToObject(response, "success", success);
     cJSON_AddStringToObject(response, "response", content);
+	if(return_key==25519) {
+		cJSON_AddStringToObject(response, "server_key", read_file("server_key_25519.pub"));
+	}else if(return_key==448) {
+		cJSON_AddStringToObject(response, "server_key", read_file("server_key_448.pub"));
+	}
+	cJSON_AddStringToObject(response, "psk", read_file("psk"));
     char *out = cJSON_Print(response);
     cJSON_Delete(response);
     return out;
@@ -124,7 +123,6 @@ static char* set_return_message(char *message){
             cJSON_AddNumberToObject(root, "success", success);
             cJSON_AddStringToObject(root, "response", content);
             response = cJSON_Print(root);
-            //free(content);
         }
         cJSON_Delete(root);
     }else{
@@ -199,7 +197,7 @@ static int initialize_handshake
     return 1;
 }
 
-int main(int argc, char *argv[])
+int main()
 {
     NoiseHandshakeState *handshake = 0;
     NoiseCipherState *send_cipher = 0;
@@ -217,18 +215,24 @@ int main(int argc, char *argv[])
         perror(key_dir);
         return 1;
     }
-    /*Gen keys and psk
-    int error;
-    for(int i=0; i<2; i++) {
-		printf("%d", i);
-        error = gen_keys(key_files[i]);
-    }
-    if(error){
-        printf("\033[31m[X] Error : can't generate keys\n\033[31m");
-        return 1;
-    }else{
-        printf("\033[0;32m[✓] Success: Keys and PSK generated successfully\033[0m\n");
-    }*/
+	/* Gen keys and PSK */
+	if (access(key_files[0].private_key, R_OK) != 0 ||
+    	access(key_files[0].public_key,  R_OK) != 0 ||
+    	access(key_files[1].private_key, R_OK) != 0 ||
+    	access(key_files[1].public_key,  R_OK) != 0) {
+		printf("generate new keys");
+    	int error = 0;
+    	for (int i = 0; i < 2; i++) {
+        	error = gen_keys(key_files[i]);
+    	}
+		error = gen_psk();
+    	if (error) {
+        	printf("\033[31m[X] Error : can't generate keys\033[0m\n");
+        	return 1;
+    	} else {
+        	printf("\033[0;32m[✓] Success: Keys and PSK generated successfully\033[0m\n");
+    	}
+	}
     if (noise_init() != NOISE_ERROR_NONE) {
         fprintf(stderr, "Noise initialization failed\n");
         return 1;
@@ -378,7 +382,7 @@ int main(int argc, char *argv[])
 
 	// On vérifie si le nom commence par "Noise_XX_"
 	printf("\n --Protocol ID: %s--\n", proto_name);
-	if (strncmp(proto_name, "Noise_NN_", 9) == 0) {
+	if ((strncmp(proto_name, "Noise_NN_", 9) == 0)||(strncmp(proto_name, "NoisePSK_NN_", 12) == 0)) {
     	is_nn = 1;
 	}
 

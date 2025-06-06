@@ -87,11 +87,6 @@ int gen_keys(KeyFile key)
         unlink(key.private_key);
         unlink(key.public_key);
     }
-    //generate psk
-    if (!gen_psk()) {
-        ok = 0;
-        printf("Error: can't generate psk");
-    }
     return ok ? 0 : 1;
 }
 int gen_psk() {

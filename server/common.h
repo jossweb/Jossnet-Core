@@ -74,5 +74,7 @@ int jossnet_recv_exact(int fd, uint8_t *packet, size_t len);
 size_t jossnet_recv(int fd, uint8_t *packet, size_t max_len);
 int jossnet_send(int fd, const uint8_t *packet, size_t len);
 void jossnet_close(int fd);
+char* read_file(const char* filename);
+int write_in_file(const char *path, const char* content);
 
 #endif
