@@ -1,6 +1,7 @@
-//
-// Created by FIGUEIRAS Jossua on 02/06/2025.
-//
+/*
+* Modified and adapted for the Jossnet project
+* © 2025 FIGUEIRAS Jossua – Licensed under the MIT License.
+*/
 
 #ifndef KEYGEN_H
 #define KEYGEN_H
@@ -14,4 +15,6 @@ typedef struct {
 } KeyFile;
 
 int gen_keys(KeyFile key);
-int gen_psk();
+
+extern const int salt_count;
+void define_psk(int server_id, const char* principal_secure_string, const int salt_index, uint8_t *psk_out);

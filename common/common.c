@@ -37,15 +37,29 @@ typedef BOOL sockopt_type;
 #define closesocket(x)  close((x))
 typedef int sockopt_type;
 #endif
-
-/*#if defined(__APPLE__)
-#define MSG_NOSIGNAL SO_NOSIGPIPE
-#endif*/
-
 #define MAX_DH_KEY_LEN 2048
 
 int jossnet_verbose = 0;
 
+void psk_to_hex(const uint8_t *psk, size_t psk_len, char *out) {
+    for (size_t i = 0; i < psk_len; ++i) {
+        sprintf(out + (i * 2), "%02x", psk[i]);
+    }
+    out[psk_len * 2] = '\0';
+}
+void derive_psk_from_seed(const char *seed, const char *salt, uint8_t *psk, size_t psk_len) {
+    NoiseHashState *hash;
+    int err;
+
+    err = noise_hashstate_new_by_id(&hash, NOISE_HASH_SHA256);
+    if (err != NOISE_ERROR_NONE) {
+        return;
+    }
+    err = noise_hashstate_pbkdf2(hash, (const uint8_t *)seed, strlen(seed), (const uint8_t *)salt, strlen(salt), 10000,
+		psk, psk_len);
+
+    noise_hashstate_free(hash);
+}
 int write_in_file(const char *path, const char* content) {
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -281,7 +295,7 @@ int jossnet_load_public_key(const char *content, uint8_t *key, size_t len, int f
         return 0;
     }
     if (!file) {
-        printf("[X] Error loading public key\n");
+        printf("\033[31m[X] Error loading public key\033[0m\n");
         return 0;
     }
     while ((ch = getc(file)) != EOF) {
@@ -299,7 +313,7 @@ int jossnet_load_public_key(const char *content, uint8_t *key, size_t len, int f
             break;
         } else if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') {
             fclose(file);
-            printf("Invalid character in public key file\n");
+            printf("Invalid character in public key file : %s\n", content);
             return 0;
         }
         group = (group << 6) | digit;

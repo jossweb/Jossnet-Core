@@ -14,7 +14,7 @@ Designed as a proof of concept, this project provides a solid foundation for exp
 
 #### Compile server
 ```sh
-gcc server.c endpoint.c common.c ../keygen/keygen.c ../cjson/cJSON.c \
+gcc server.c endpoint.c ../common/common.c ../keygen/keygen.c ../cjson/cJSON.c \
   -I../build/include \
   ../build/lib/libnoisekeys.a \
   ../build/lib/libnoiseprotobufs.a \
@@ -24,7 +24,7 @@ gcc server.c endpoint.c common.c ../keygen/keygen.c ../cjson/cJSON.c \
 
 #### Compile client
 ```sh
-gcc client.c ../server/common.c \
+gcc client.c ../common/common.c ../keygen/keygen.c  ../cjson/cJSON.c \
   -I../build/include \
   ../build/lib/libnoisekeys.a \
   ../build/lib/libnoiseprotobufs.a \

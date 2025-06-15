@@ -76,5 +76,7 @@ int jossnet_send(int fd, const uint8_t *packet, size_t len);
 void jossnet_close(int fd);
 char* read_file(const char* filename);
 int write_in_file(const char *path, const char* content);
+void derive_psk_from_seed(const char *seed, const char *salt, uint8_t *psk, size_t psk_len);
+void psk_to_hex(const uint8_t *psk, size_t psk_len, char *out);
 
 #endif

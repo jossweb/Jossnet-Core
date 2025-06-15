@@ -9,7 +9,7 @@
  */
 
 #include <noise/protocol.h>
-#include "../server/common.h"
+#include "../common/common.h"
 #include "../keygen/keygen.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,22 +17,33 @@
 #include <unistd.h>
 #include <getopt.h>
 #include "../cjson/cJSON.h"
+#include <sys/stat.h>
+#ifdef _WIN32
+	#include <direct.h>
+    #define MKDIR(path) _mkdir(path)
+#else
+    #include <sys/types.h>
+    #define MKDIR(path) mkdir(path, 0700)
+#endif
 
 /* Parsed command-line options */
 static const int dh = 25519;
-static char *client_private_key = "keys/client_key_25519";
-static char *server_public_key = "keys/server_key_25519.pub";
-static const char *psk_file = "keys/psk";
+static char *client_private_key = "client_key_25519";
+static char *server_public_key = "server_key_25519.pub";
+static const char *psk_file;
 static uint8_t psk[32];
-static char *protocol = "NoisePSK_KK_25519_ChaChaPoly_BLAKE2b";
+static char *protocol = "NoisePSK_NK_25519_ChaChaPoly_BLAKE2b";
 static const char *hostname = "localhost";
 static int port = 2006;
 static int padding = 0;
 static int fixed_ephemeral = 0;
+int starting_mode = 1;
+
+static const char *key_dir = "keys/";
 
 const KeyFile key_files[] = {
-    {"25519", "keys/client_key_25519", "keys/client_key_25519.pub"},
-    {"448",   "keys/client_key_448",   "keys/client_key_448.pub"}
+    {"25519", "client_key_25519", "client_key_25519.pub"},
+    {"448",   "client_key_448",   "client_key_448.pub"}
 };
 
 /* Message buffer for send/receive */
@@ -46,13 +57,27 @@ static void save_data_from_server(char* json){
 		cJSON *success = cJSON_GetObjectItemCaseSensitive(root, "success");
 		if(success){
 			cJSON *serverkey = cJSON_GetObjectItemCaseSensitive(root, "server_key");
+			cJSON *server_id = cJSON_GetObjectItemCaseSensitive(root, "server_id");
+			cJSON *salt_index = cJSON_GetObjectItemCaseSensitive(root, "salt_index");
+			cJSON *secure_string = cJSON_GetObjectItemCaseSensitive(root, "secure_string");
+
+			if (server_id && salt_index && secure_string) {
+    			int server_id_val = cJSON_GetNumberValue(server_id);
+    			int salt_index_val = cJSON_GetNumberValue(salt_index);
+    			const char *secure_str_val = cJSON_GetStringValue(secure_string);
+
+    			define_psk(server_id_val, secure_str_val, salt_index_val, psk);
+			} else {
+    			printf("Missing field(s) in server data\n");
+			}
  			char* path;
 			if(dh==25519){
-				path="keys/server_key_25519.pub";
+				path="server_key_25519.pub";
 			}else{
-				path="keys/server_key_448.pub";
+				path="server_key_448.pub";
 			}
-			write_in_file(path, (char*)serverkey);
+			const char *serverkey_str = cJSON_GetStringValue(serverkey);
+			write_in_file(path, serverkey_str);
 		}else{
 			printf("Server don't send data successfully\n");
 		}
@@ -73,18 +98,13 @@ static int initialize_handshake(NoiseHandshakeState *handshake, const void *prol
         noise_perror("prologue", err);
         return 0;
     }
-    if (psk_file && noise_handshakestate_needs_pre_shared_key(handshake)) {
-        if (!jossnet_load_public_key(psk_file, psk, sizeof(psk), 1)){
-			noise_perror("psk", err);
-			return 0;
-		}
-        err = noise_handshakestate_set_pre_shared_key
-            (handshake, psk, sizeof(psk));
-        if (err != NOISE_ERROR_NONE) {
-            noise_perror("psk", err);
-            return 0;
-        }
-    }
+	if (noise_handshakestate_needs_pre_shared_key(handshake)) {
+    	err = noise_handshakestate_set_pre_shared_key(handshake, psk, sizeof(psk));
+    	if (err != NOISE_ERROR_NONE) {
+        	noise_perror("psk", err);
+        	return 0;
+    	}
+	}
     /* Set the local keypair for the client */
     if (noise_handshakestate_needs_local_keypair(handshake)) {
         if (client_private_key) {
@@ -134,10 +154,9 @@ static int initialize_handshake(NoiseHandshakeState *handshake, const void *prol
     }
     return 1;
 }
+int communication_to_server(){
 
-int main(int argc, char *argv[])
-{
-    NoiseHandshakeState *handshake;
+	NoiseHandshakeState *handshake;
     NoiseCipherState *send_cipher = 0;
     NoiseCipherState *recv_cipher = 0;
     NoiseRandState *rand = 0;
@@ -149,67 +168,7 @@ int main(int argc, char *argv[])
     size_t message_size;
     size_t max_line_len;
 
-	if (!(argc > 1 && !strcmp(argv[1], "--initkeys"))) {
-		if ((dh == 25519) &&
-    	(access("keys/server_key_25519.pub", R_OK) ||
-   		access(key_files[0].private_key, R_OK) ||
-   		access(key_files[0].public_key, R_OK))) {
-   			int status = system("./client --initkeys");
-   			if (status != 0) {
-       			fprintf(stderr, "Error --initkeys\n");
-    	 		exit(1);
-    		}
-		}
-
-		if ((dh == 448) &&
-    		(access("keys/server_key_448.pub", R_OK) ||
-     		access(key_files[1].private_key, R_OK) ||
-     		access(key_files[1].public_key, R_OK))) {
-
-    		int status = system("./client --initkeys");
-    		if (status != 0) {
-        		fprintf(stderr, "Error --initkeys\n");
-       	 		exit(1);
-    		}
-		}
-	}
-
-	if (argc > 1 && !strcmp(argv[1], "--initkeys")) {
-        printf("[!] Init keys mode is enable\n");
-		if(dh==448){
-			protocol = "Noise_NN_448_ChaChaPoly_BLAKE2b";
-			client_private_key = "keys/client_key_448";
-		}else if(dh==25519){
-			protocol = "Noise_NN_448_ChaChaPoly_BLAKE2b";
-			client_private_key = "keys/client_key_25519";
-		}else{
-			printf("[X] Init keys mode is disabled\n %d is not supported\n", dh);
-			return 0;
-		}
-		server_public_key = NULL;
-
-		//generate new keys
-		int error = 0;
-		for (int i = 0; i < 2; i++) {
-        	error = gen_keys(key_files[i]);
-    	}
-		if (error) {
-        	printf("\033[31m[X] Error : can't generate keys\033[0m\n");
-        	return 1;
-    	} else {
-        	printf("\033[0;32m[✓] Success: Keys and PSK generated successfully\033[0m\n");
-    	}
-    }else if(dh==448){
-		client_private_key = "client_key_448";
-		server_public_key = "server_key_448.pub";
-		protocol = "NoisePSK_KK_448_ChaChaPoly_BLAKE2b";
-	}
-    if (noise_init() != NOISE_ERROR_NONE) {
-        fprintf(stderr, "Noise initialization failed\n");
-        return 1;
-    }
-
-    /* Check that the echo protocol supports the handshake protocol.
+	/* Check that the echo protocol supports the handshake protocol.
        One-way handshake patterns and XXfallback are not yet supported. */
     if (!jossnet_get_protocol_id(&id, protocol)) {
         fprintf(stderr, "%s: not supported by the echo protocol\n", protocol);
@@ -224,8 +183,6 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    /* Set the handshake options and verify that everything we need
-       has been supplied on the command-line. */
     if (!initialize_handshake(handshake, &id, sizeof(id))) {
         noise_handshakestate_free(handshake);
         return 1;
@@ -319,14 +276,16 @@ int main(int argc, char *argv[])
 
     /* Tell the user that the handshake has been successful */
     if (ok) {
-        printf("%s handshake complete. Send a message to the server\n", protocol);
+        printf("%s handshake complete.\n", protocol);
+		if(!starting_mode)
+			printf("[*] Send a message to the server\n");
     }
 	//get client's public key
 	char* pub_key;
 	if(dh==448){
-		pub_key = read_file("keys/client_key_448.pub");
+		pub_key = read_file("client_key_448.pub");
 	}else if(dh==25519){
-		pub_key = read_file("keys/client_key_448.pub");
+		pub_key = read_file("client_key_448.pub");
 	}
 	if(!pub_key){
 		return 1;
@@ -336,7 +295,7 @@ int main(int argc, char *argv[])
     max_line_len = sizeof(message) - 2 - noise_cipherstate_get_mac_length(send_cipher);
     while (ok) {
         /* Pad the message to a uniform size */
-		if (argc > 1 && !strcmp(argv[1], "--initkeys") && !sent_init_request) {
+		if (starting_mode) {
         	cJSON *response = cJSON_CreateObject();
         	cJSON_AddStringToObject(response, "endpoint", "registre");
         	cJSON_AddNumberToObject(response, "type", dh);
@@ -415,11 +374,10 @@ int main(int argc, char *argv[])
                 mbuf.size = end + 1 - mbuf.data;
         }
 
-        /* Write the server's response in standard output */
-        fputs("Received: ", stdout);
+		fputs("Received: ", stdout);
         fwrite(mbuf.data, 1, mbuf.size, stdout);
 
-		if(argc > 1 && !strcmp(argv[1], "--initkeys")){
+		if(starting_mode){
 			save_data_from_server((char *)mbuf.data);
 			break;
 		}
@@ -431,4 +389,79 @@ int main(int argc, char *argv[])
     noise_randstate_free(rand);
     jossnet_close(fd);
     return ok ? 0 : 1;
+
+}
+
+int main(int argc, char *argv[])
+{
+    NoiseHandshakeState *handshake;
+    NoiseCipherState *send_cipher = 0;
+    NoiseCipherState *recv_cipher = 0;
+    NoiseRandState *rand = 0;
+    NoiseBuffer mbuf;
+    JossnetProtocolId id;
+    int err, ok;
+    int action;
+    int fd;
+    size_t message_size;
+    size_t max_line_len;
+
+	printf("\n--- JOSSNET CLIENT 0.0.1 BETA ---\n\n");
+    printf("[!] Init keys mode is enable\n");
+	if(dh==448){
+		protocol = "Noise_NN_448_ChaChaPoly_BLAKE2b";
+		client_private_key = "client_key_448";
+	}else if(dh==25519){
+		protocol = "Noise_NN_25519_ChaChaPoly_BLAKE2b";
+		client_private_key = "client_key_25519";
+	}else{
+		printf("\033[31m[X] %d is not supported\033[0m\n", dh);
+		return 0;
+	}
+	server_public_key = NULL;
+
+	if (!MKDIR("keys")){
+		printf("[*] Create keys \n");
+	}
+    if (chdir(key_dir) < 0) {
+        return 1;
+	}
+
+	//generate new keys
+	int error = 0;
+	for (int i = 0; i < 2; i++) {
+        error = gen_keys(key_files[i]);
+    }
+	if (!error) {
+        printf("\033[31m[X] Error : can't generate keys\033[0m\n");
+        return 1;
+    } else {
+        printf("\033[0;32m[✓] Success: Keys generated successfully\033[0m\n");
+    }
+    if(dh==448){
+		client_private_key = "client_key_448";
+		server_public_key = "server_key_448.pub";
+		protocol = "NoisePSK_KK_448_ChaChaPoly_BLAKE2b";
+	}
+    if (noise_init() != NOISE_ERROR_NONE) {
+        fprintf(stderr, "Noise initialization failed\n");
+        return 1;
+    }
+	if(!communication_to_server()){
+		starting_mode = 0;
+		if(dh==448){
+			client_private_key = "client_key_448";
+			server_public_key = "server_key_448.pub";
+			protocol = "NoisePSK_NK_448_ChaChaPoly_BLAKE2b";
+		}
+		if(dh==25519){
+			client_private_key = "client_key_25519";
+			server_public_key = "server_key_25519.pub";
+			protocol = "NoisePSK_NK_25519_ChaChaPoly_BLAKE2b";
+		}
+		communication_to_server();
+		return 1;
+	}else{
+		printf("\033[31m[X] Noise initialization failed\033[0m\n");
+	}
 }

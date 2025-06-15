@@ -50,3 +50,5 @@ id_rsa*
 *.crt
 *.enc
 .DS_Store
+server/server
+client/client

@@ -1,5 +1,5 @@
 /*
-* Modified and adapted for the Jossnet project
+ * Modified and adapted for the Jossnet project
  * © 2025 FIGUEIRAS Jossua – Licensed under the MIT License.
  *
  * This file contains portions of code derived from the Noise-C project:
@@ -11,19 +11,85 @@
 #include <noise/protocol.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <stdint.h>
+#include <string.h>
 #include <time.h>
 #include "keygen.h"
+#include "../common/common.h"
+#ifdef _WIN32
+	#include <direct.h>
+    #define MKDIR(path) _mkdir(path)
+#else
+    #include <unistd.h>
+    #include <sys/types.h>
+    #define MKDIR(path) mkdir(path, 0700)
+#endif
+
+#include <sys/stat.h>
 
 #define PSK_LENGTH 42
 
+const char* salt[] = {
+    "jossnet_salt_001", "jossnet_salt_002", "jossnet_salt_003", "jossnet_salt_004",
+    "jossnet_salt_005", "jossnet_salt_006", "jossnet_salt_007", "jossnet_salt_008",
+    "jossnet_salt_009", "jossnet_salt_010", "jossnet_salt_011", "jossnet_salt_012",
+    "jossnet_salt_013", "jossnet_salt_014", "jossnet_salt_015", "jossnet_salt_016",
+    "jossnet_salt_017", "jossnet_salt_018", "jossnet_salt_019", "jossnet_salt_020",
+    "jossnet_salt_021", "jossnet_salt_022", "jossnet_salt_023", "jossnet_salt_024",
+    "jossnet_salt_025", "jossnet_salt_026", "jossnet_salt_027", "jossnet_salt_028",
+    "jossnet_salt_029", "jossnet_salt_030", "jossnet_salt_031", "jossnet_salt_032",
+    "jossnet_salt_033", "jossnet_salt_034", "jossnet_salt_035", "jossnet_salt_036",
+    "jossnet_salt_037", "jossnet_salt_038", "jossnet_salt_039", "jossnet_salt_040",
+    "jossnet_salt_041", "jossnet_salt_042", "jossnet_salt_043", "jossnet_salt_044",
+    "jossnet_salt_045", "jossnet_salt_046", "jossnet_salt_047", "jossnet_salt_048",
+    "jossnet_salt_049", "jossnet_salt_050", "jossnet_salt_051", "jossnet_salt_052",
+    "jossnet_salt_053", "jossnet_salt_054", "jossnet_salt_055", "jossnet_salt_056",
+    "jossnet_salt_057", "jossnet_salt_058", "jossnet_salt_059", "jossnet_salt_060",
+    "jossnet_salt_061", "jossnet_salt_062", "jossnet_salt_063", "jossnet_salt_064",
+    "jossnet_salt_065", "jossnet_salt_066", "jossnet_salt_067", "jossnet_salt_068",
+    "jossnet_salt_069", "jossnet_salt_070", "jossnet_salt_071", "jossnet_salt_072",
+    "jossnet_salt_073", "jossnet_salt_074", "jossnet_salt_075", "jossnet_salt_076",
+    "jossnet_salt_077", "jossnet_salt_078", "jossnet_salt_079", "jossnet_salt_080",
+    "jossnet_salt_081", "jossnet_salt_082", "jossnet_salt_083", "jossnet_salt_084",
+    "jossnet_salt_085", "jossnet_salt_086", "jossnet_salt_087", "jossnet_salt_088",
+    "jossnet_salt_089", "jossnet_salt_090", "jossnet_salt_091", "jossnet_salt_092",
+    "jossnet_salt_093", "jossnet_salt_094", "jossnet_salt_095", "jossnet_salt_096",
+    "jossnet_salt_097", "jossnet_salt_098", "jossnet_salt_099", "jossnet_salt_100",
+    "jossnet_salt_101", "jossnet_salt_102", "jossnet_salt_103", "jossnet_salt_104",
+    "jossnet_salt_105", "jossnet_salt_106", "jossnet_salt_107", "jossnet_salt_108",
+    "jossnet_salt_109", "jossnet_salt_110", "jossnet_salt_111", "jossnet_salt_112",
+    "jossnet_salt_113", "jossnet_salt_114", "jossnet_salt_115", "jossnet_salt_116",
+    "jossnet_salt_117", "jossnet_salt_118", "jossnet_salt_119", "jossnet_salt_120",
+    "jossnet_salt_121", "jossnet_salt_122", "jossnet_salt_123", "jossnet_salt_124",
+    "jossnet_salt_125", "jossnet_salt_126", "jossnet_salt_127", "jossnet_salt_128"
+};
+const int salt_count = 128;
 
 int save_private_key(const char *filename, const uint8_t *key, size_t len);
 int save_public_key(const char *filename, const uint8_t *key, size_t len);
-int gen_psk();
 
+const char* secondary_secure_string  = "Jossnet2025Server";
+
+char* build_seed(int server_id, const char* principal_secure_string , const char* secondary_secure_string) {
+    char server_id_str[16];
+    snprintf(server_id_str, sizeof(server_id_str), "%d", server_id);
+    size_t total_len = strlen(server_id_str) + strlen(principal_secure_string) + strlen(secondary_secure_string) + 1;
+    char* seed = malloc(total_len);
+    if (!seed) return NULL;
+
+    snprintf(seed, total_len, "%s%s%s", server_id_str, principal_secure_string , secondary_secure_string);
+    return seed;
+}
+void define_psk(int server_id, const char* principal_secure_string, const int salt_index, uint8_t *psk_out) {
+    char* seed = build_seed(server_id, principal_secure_string, secondary_secure_string);
+    if (!seed) {
+        memset(psk_out, 0, PSK_LENGTH);
+        return;
+    }
+    derive_psk_from_seed(seed, "ton_salt", psk_out, PSK_LENGTH);
+    free(seed);
+}
 int gen_keys(KeyFile key)
 {
     NoiseDHState *dh;
@@ -38,11 +104,9 @@ int gen_keys(KeyFile key)
         fprintf(stderr, "Noise initialization failed\n");
         return 0;
     }
-
-    mkdir("keys", 0700);
     char cwd[1024];
     if (getcwd(cwd, sizeof(cwd)) != NULL)
-        printf("Clés générées dans le dossier : %s\n", cwd);
+        printf("Keys have been generated at : %s\n", cwd);
     else
         printf("error getting current directory\n");
 
@@ -87,26 +151,6 @@ int gen_keys(KeyFile key)
         unlink(key.private_key);
         unlink(key.public_key);
     }
-    return ok ? 0 : 1;
-}
-int gen_psk() {
-    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    char psk[PSK_LENGTH + 1];
-
-    // Init seed
-    srand((unsigned int)time(NULL));
-
-    for (int i = 0; i < PSK_LENGTH; i++) {
-        psk[i] = charset[rand() % (sizeof(charset) - 1)];
-    }
-    psk[PSK_LENGTH] = '\0';
-    FILE *f = fopen("psk", "w");
-    if (!f) {
-        perror("Error: can't generate psk");
-        return 0;
-    }
-    fprintf(f, "%s\n", psk);
-    fclose(f);
     return 1;
 }
 /* Saves a binary private key to a file.  Returns non-zero if OK. */

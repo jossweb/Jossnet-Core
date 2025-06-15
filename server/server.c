@@ -9,15 +9,25 @@
  */
 
 #include <noise/protocol.h>
-#include "common.h"
+#include "../common/common.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>
 #include <getopt.h>
 #include "../keygen/keygen.h"
 #include "../cjson/cJSON.h"
 #include "endpoint.h"
+#include <time.h>
+#ifdef _WIN32
+	#include <direct.h>
+    #define MKDIR(path) _mkdir(path)
+#else
+    #include <unistd.h>
+    #include <sys/types.h>
+    #define MKDIR(path) mkdir(path, 0700)
+#endif
 
 /* Parsed command-line options */
 static const char *key_dir = "keys/";
@@ -37,12 +47,17 @@ static uint8_t psk[32];
 #define MAX_MESSAGE_LEN 65535
 static uint8_t message[MAX_MESSAGE_LEN + 2];
 
+int server_id;
+int salt_index;
+//secure string for generate psk (you need to change it)
+const char* secure_string = "Jossnet-secure-screen-for-psk";
+
 const KeyFile key_files[] = {
     {"25519", "server_key_25519", "server_key_25519.pub"},
     {"448",   "server_key_448",   "server_key_448.pub"}
 };
 
-static char* register_newuser(char *message) {
+static char* register_newclient(char *message) {
     int success = 1;
     char* content = "Key successfully registered, you can now interact with the server without using the XX mod, see the documentation";
     cJSON *root = cJSON_Parse((char*)message);
@@ -58,7 +73,7 @@ static char* register_newuser(char *message) {
             	if (type_val == 25519) {
                     FILE *f = fopen("clients-25519.txt", "a");
                     if (f == NULL) {
-                       	printf("[X] Error can't open file keys/clients25519.json");
+                       	printf("\033[31m[X] Error can't open file keys/clients25519.json\033[0m");
                     } else {
                        	fprintf(f, "%s\n", key_str);
 						return_key=25519;
@@ -67,7 +82,7 @@ static char* register_newuser(char *message) {
             	} else if (type_val == 448) {
                     FILE *f = fopen("clients-448.txt", "a");
 					if (f == NULL) {
-    					printf("[X] Error can't open file clients.txt\n");
+    					printf("\033[31m[X] Error can't open file clients.txt\033[0m\n");
 					} else {
 						return_key=448;
    						fprintf(f, "%s\n", key_str);
@@ -92,13 +107,16 @@ static char* register_newuser(char *message) {
     }
     cJSON *response = cJSON_CreateObject();
     cJSON_AddNumberToObject(response, "success", success);
+    cJSON_AddNumberToObject(response, "server_id", server_id);
+	cJSON_AddNumberToObject(response, "salt_index", salt_index);
     cJSON_AddStringToObject(response, "response", content);
+	cJSON_AddStringToObject(response, "secure_string", secure_string);
+
 	if(return_key==25519) {
 		cJSON_AddStringToObject(response, "server_key", read_file("server_key_25519.pub"));
 	}else if(return_key==448) {
 		cJSON_AddStringToObject(response, "server_key", read_file("server_key_448.pub"));
 	}
-	cJSON_AddStringToObject(response, "psk", read_file("psk"));
     char *out = cJSON_Print(response);
     cJSON_Delete(response);
     return out;
@@ -211,10 +229,19 @@ int main()
     int ok = 1;
     int action;
 
+    printf("\n--- JOSSNET SERVER 0.0.1 BETA ---\n\n");
+
+    srand(time(NULL));
+	server_id = rand() % 1000;
+    salt_index = rand() % salt_count;
+
+	define_psk(server_id, secure_string, salt_index, psk);
+	if (!MKDIR("keys")){
+		printf("[*] Create keys folder\n");
+	}
     if (chdir(key_dir) < 0) {
-        perror(key_dir);
         return 1;
-    }
+	}
 	/* Gen keys and PSK */
 	if (access(key_files[0].private_key, R_OK) != 0 ||
     	access(key_files[0].public_key,  R_OK) != 0 ||
@@ -225,8 +252,7 @@ int main()
     	for (int i = 0; i < 2; i++) {
         	error = gen_keys(key_files[i]);
     	}
-		error = gen_psk();
-    	if (error) {
+    	if (!error) {
         	printf("\033[31m[X] Error : can't generate keys\033[0m\n");
         	return 1;
     	} else {
@@ -243,46 +269,7 @@ int main()
     if (!jossnet_load_private_key("server_key_448", server_key_448, sizeof(server_key_448))) {
         return 1;
     }
-    if (!jossnet_load_public_key("psk", psk, sizeof(psk), 1)) {
-        return 1;
-    }
-	if (!jossnet_load_public_key("8RmZ3dtdeQHXjtcW40fdAGM/HjDTeuKedBh0Bbeq1zo=", client_key_25519, sizeof(client_key_25519), 0)) {
-		printf("jossnet_load_public_key failed\n");
-		return 1;
-	}
-	//Add public key of verified clients
-	char line[256];
-	FILE *f = fopen("clients-25519.txt", "r");
-	if (f == NULL) {
-    	printf("Cannot open file\n");
-	}else{
-		if (fgets(line, sizeof(line), f)) {
-    		line[strcspn(line, "\n")] = '\0';
-    		printf("Clé : %s\n", line);
-    		if (!jossnet_load_public_key(line, client_key_25519, sizeof(client_key_25519), 0)) {
-        		printf("can't add client's key : %s", line);
-        		return 1;
-    		} else {
-        	printf("%s : added successfully\n", line);
-			}
-    	}
-	}
-	f = fopen("clients-448.txt", "r");
-	if (f == NULL) {
-    	printf("Cannot open file\n");
-	}else{
-		while (fgets(line, sizeof(line), f)) {
-    		line[strcspn(line, "\n")] = '\0';
-    		printf("Clé : %s\n", line);
-			if (!jossnet_load_public_key(line, server_key_448, sizeof(server_key_448), 0)) {
-				printf("can't add client's key : %s", line);
-				return 1;
-			}else{
-				printf("%s : added successfully\n", line);
-			}
-		}
-	}
-	fclose(f);
+    printf("\n");
     /* Accept an incoming connection */
     fd = jossnet_accept(port);
     /* Read the echo protocol identifier sent by the client */
@@ -380,7 +367,7 @@ int main()
 	// get protocol name
 	noise_protocol_id_to_name(proto_name, sizeof(proto_name), &proto_id);
 
-	// On vérifie si le nom commence par "Noise_XX_"
+	// check if client use NN mode (no auth)
 	printf("\n --Protocol ID: %s--\n", proto_name);
 	if ((strncmp(proto_name, "Noise_NN_", 9) == 0)||(strncmp(proto_name, "NoisePSK_NN_", 12) == 0)) {
     	is_nn = 1;
@@ -398,7 +385,7 @@ int main()
             noise_buffer_set_inout(mbuf, message + 2, message_size - 2, sizeof(message) - 2);
             err = noise_cipherstate_decrypt(recv_cipher, &mbuf);
             if (err == NOISE_ERROR_NONE) {
-                char* response = register_newuser((char*)mbuf.data);
+                char* response = register_newclient((char*)mbuf.data);
                 size_t response_len = strlen(response);
                 if (response_len <= mbuf.max_size) {
                     memcpy(mbuf.data, response, response_len);
@@ -415,7 +402,7 @@ int main()
             }
         }
     } else {
-        //other mod
+        //normal mod
         while (ok) {
             message_size = jossnet_recv(fd, message, sizeof(message));
             if (!message_size)
