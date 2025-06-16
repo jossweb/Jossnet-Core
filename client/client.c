@@ -33,7 +33,7 @@ static char *server_public_key = "server_key_25519.pub";
 static const char *psk_file;
 static uint8_t psk[32];
 static char *protocol = "NoisePSK_NK_25519_ChaChaPoly_BLAKE2b";
-static const char *hostname = "localhost";
+static const char *hostname = "192.168.1.18";
 static int port = 2006;
 static int padding = 0;
 static int fixed_ephemeral = 0;
