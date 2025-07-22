@@ -6,7 +6,7 @@ This project aims to demonstrate the implementation of a secure and high-perform
 
 Designed as a proof of concept, this project provides a solid foundation for exploring best practices in securing communications, automating onboarding, and protecting exchanges in various environments. It is intended for developers, students, and cybersecurity enthusiasts who wish to discover or experiment with innovative solutions for authentication and key management in client-server applications.
 
-**Warning:** This project is still under development.
+**Warning:** This project is not intended for production use. This project is for educational purposes. With the aim of subsequently developing a version ready for a production project!
 
 ---
 
