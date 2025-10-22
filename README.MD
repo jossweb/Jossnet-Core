@@ -1,5 +1,3 @@
-![Jossnet banner](https://jossweb.fr/img/jossnet-banner.png)
-
 ## About Jossnet
 
 This project aims to demonstrate the implementation of a secure and high-performance exchange system between a client and a server, relying on the Noise cryptographic protocol. The objective is to offer a modern, fast, and easily integrable architecture, while ensuring authentication and key management adapted to the needs of distributed applications.
